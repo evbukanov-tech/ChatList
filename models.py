@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
@@ -129,7 +130,13 @@ def delete(model_id: int) -> None:
     _ensure_db()
     if db.get_model(model_id) is None:
         raise ValidationError(f"Модель с id={model_id} не найдена.")
-    db.delete_model(model_id)
+    try:
+        db.delete_model(model_id)
+    except sqlite3.IntegrityError as exc:
+        raise ValidationError(
+            "Нельзя удалить модель: в базе есть сохранённые ответы этой модели. "
+            "Сначала удалите связанные результаты на вкладке «Результаты»."
+        ) from exc
 
 
 def toggle_active(model_id: int) -> Model:

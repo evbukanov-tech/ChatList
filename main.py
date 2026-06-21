@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTextBrowser,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -40,6 +41,7 @@ import seed
 from session import ResultSession
 
 LOGS_DIR = Path("logs")
+RESPONSE_PREVIEW_LINES = 5
 
 
 def setup_logging() -> None:
@@ -59,6 +61,37 @@ def show_error(parent: QWidget | None, title: str, message: str) -> None:
 
 def show_info(parent: QWidget | None, title: str, message: str) -> None:
     QMessageBox.information(parent, title, message)
+
+
+def response_preview(text: str, max_lines: int = RESPONSE_PREVIEW_LINES) -> str:
+    lines = text.splitlines()
+    if len(lines) <= max_lines:
+        return text
+    return "\n".join(lines[:max_lines]) + "\n…"
+
+
+def show_markdown_viewer(parent: QWidget | None, title: str, text: str) -> None:
+    dialog = QDialog(parent)
+    dialog.setWindowTitle(title)
+    dialog.setMinimumSize(720, 520)
+
+    browser = QTextBrowser()
+    browser.setMarkdown(text)
+    browser.setOpenExternalLinks(True)
+
+    buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+    buttons.rejected.connect(dialog.reject)
+
+    layout = QVBoxLayout(dialog)
+    layout.addWidget(browser)
+    layout.addWidget(buttons)
+    dialog.exec()
+
+
+def add_open_button(table: QTableWidget, row: int, column: int, on_open) -> None:
+    btn = QPushButton("Открыть")
+    btn.clicked.connect(on_open)
+    table.setCellWidget(row, column, btn)
 
 
 class SendWorker(QThread):
@@ -146,14 +179,18 @@ class RequestTab(QWidget):
 
         self.status_label = QLabel("Готово")
 
-        self.results_table = QTableWidget(0, 3)
-        self.results_table.setHorizontalHeaderLabels(["Модель", "Ответ", "Выбрать"])
+        self.results_table = QTableWidget(0, 4)
+        self.results_table.setHorizontalHeaderLabels(["Модель", "Ответ", "Выбрать", ""])
         self.results_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         self.results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.results_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.results_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.results_table.setWordWrap(True)
+        self.results_table.verticalHeader().setMinimumSectionSize(56)
         self.results_table.setAlternatingRowColors(True)
+        self.results_table.setToolTip("Двойной клик по ответу — просмотр в Markdown")
         self.results_table.itemChanged.connect(self._on_table_item_changed)
+        self.results_table.cellDoubleClicked.connect(self._on_result_cell_double_clicked)
 
         select_all_btn = QPushButton("Выбрать все")
         select_all_btn.clicked.connect(self._select_all)
@@ -275,22 +312,50 @@ class RequestTab(QWidget):
         for row_idx, row in enumerate(self.session.rows):
             name_item = QTableWidgetItem(row.model_name)
             name_item.setFlags(name_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            name_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
             self.results_table.setItem(row_idx, 0, name_item)
 
-            text_item = QTableWidgetItem(row.response_text)
+            preview = response_preview(row.response_text)
+            text_item = QTableWidgetItem(preview)
             text_item.setFlags(text_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            text_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+            )
+            text_item.setData(Qt.ItemDataRole.UserRole, row.response_text)
+            text_item.setToolTip("Двойной клик — полный ответ")
             self.results_table.setItem(row_idx, 1, text_item)
 
             check_item = QTableWidgetItem()
             check_item.setFlags(
                 Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled
             )
+            check_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             state = Qt.CheckState.Checked if row.selected else Qt.CheckState.Unchecked
             check_item.setCheckState(state)
             self.results_table.setItem(row_idx, 2, check_item)
 
+            add_open_button(
+                self.results_table,
+                row_idx,
+                3,
+                lambda _checked=False, r=row_idx: self._open_result_markdown(r),
+            )
+
         self.results_table.resizeRowsToContents()
         self._updating_table = False
+
+    def _open_result_markdown(self, row: int) -> None:
+        if not (0 <= row < len(self.session.rows)):
+            return
+        item = self.session.rows[row]
+        show_markdown_viewer(self, f"Ответ — {item.model_name}", item.response_text)
+
+    def _on_result_cell_double_clicked(self, row: int, column: int) -> None:
+        if column != 1 or not (0 <= row < len(self.session.rows)):
+            return
+        self._open_result_markdown(row)
 
     def _on_table_item_changed(self, item: QTableWidgetItem) -> None:
         if self._updating_table or item.column() != 2:
@@ -371,7 +436,6 @@ class ModelsTab(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.table.setSortingEnabled(True)
 
         add_btn = QPushButton("Добавить")
         add_btn.clicked.connect(self._add)
@@ -419,7 +483,7 @@ class ModelsTab(QWidget):
         else:
             all_models.sort(key=lambda m: (not m.is_active, m.name.lower()))
 
-        self.table.setSortingEnabled(False)
+        self.table.clearSelection()
         self.table.setRowCount(len(all_models))
         for row_idx, model in enumerate(all_models):
             self.table.setItem(row_idx, 0, QTableWidgetItem(str(model.id)))
@@ -428,7 +492,6 @@ class ModelsTab(QWidget):
             self.table.setItem(row_idx, 3, QTableWidgetItem(model.api_id))
             active_item = QTableWidgetItem("Да" if model.is_active else "Нет")
             self.table.setItem(row_idx, 4, active_item)
-        self.table.setSortingEnabled(True)
 
     def _selected_model_id(self) -> int | None:
         rows = self.table.selectionModel().selectedRows()
@@ -560,14 +623,17 @@ class ResultsTab(QWidget):
         self.order_combo.addItem("ID (возр.)", ("id", "ASC"))
         self.order_combo.currentIndexChanged.connect(self._reload)
 
-        self.table = QTableWidget(0, 6)
+        self.table = QTableWidget(0, 7)
         self.table.setHorizontalHeaderLabels(
-            ["ID", "Дата", "Модель", "Промт", "Ответ", "prompt_id"]
+            ["ID", "Дата", "Модель", "Промт", "Ответ", "prompt_id", ""]
         )
         self.table.setColumnHidden(5, True)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setWordWrap(True)
+        self.table.verticalHeader().setMinimumSectionSize(56)
+        self.table.cellDoubleClicked.connect(self._on_cell_double_clicked)
 
         refresh_btn = QPushButton("Обновить")
         refresh_btn.clicked.connect(self._reload)
@@ -598,9 +664,37 @@ class ResultsTab(QWidget):
             if len(prompt_preview) > 120:
                 prompt_preview = prompt_preview[:117] + "…"
             self.table.setItem(row_idx, 3, QTableWidgetItem(prompt_preview))
-            self.table.setItem(row_idx, 4, QTableWidgetItem(result.response_text))
+            response_item = QTableWidgetItem(response_preview(result.response_text or ""))
+            response_item.setData(Qt.ItemDataRole.UserRole, result.response_text or "")
+            response_item.setTextAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+            )
+            response_item.setToolTip("Двойной клик — просмотр в Markdown")
+            self.table.setItem(row_idx, 4, response_item)
             self.table.setItem(row_idx, 5, QTableWidgetItem(str(result.prompt_id)))
+            add_open_button(
+                self.table,
+                row_idx,
+                6,
+                lambda _checked=False, r=row_idx: self._open_result_markdown(r),
+            )
         self.table.resizeRowsToContents()
+
+    def _open_result_markdown(self, row: int) -> None:
+        item = self.table.item(row, 4)
+        if item is None:
+            return
+        full_text = item.data(Qt.ItemDataRole.UserRole)
+        if not full_text:
+            return
+        model_item = self.table.item(row, 2)
+        model_name = model_item.text() if model_item else "модель"
+        show_markdown_viewer(self, f"Ответ — {model_name}", str(full_text))
+
+    def _on_cell_double_clicked(self, row: int, column: int) -> None:
+        if column != 4:
+            return
+        self._open_result_markdown(row)
 
 
 class SettingsTab(QWidget):

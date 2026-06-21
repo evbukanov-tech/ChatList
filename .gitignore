@@ -147,8 +147,14 @@ activemq-data/
 # SageMath parsed files
 *.sage.py
 
+# ChatList database
+chatlist.db
+chatlist.db-journal
+logs/
+
 # Environments
 .env
+.env.local
 .envrc
 .venv
 env/

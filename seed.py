@@ -31,3 +31,12 @@ def seed_if_empty() -> None:
     for key, value in DEFAULT_SETTINGS.items():
         if not db.get_setting(key):
             db.set_setting(key, value)
+
+    if not db.get_setting("prompt_assistant_model_id"):
+        active = db.list_active_models()
+        if active:
+            db.set_setting("prompt_assistant_model_id", str(active[0].id))
+        else:
+            all_models = db.list_models()
+            if all_models:
+                db.set_setting("prompt_assistant_model_id", str(all_models[0].id))

@@ -158,3 +158,22 @@ def set_active(model_id: int, is_active: bool) -> Model:
     updated = db.get_model(model_id)
     assert updated is not None
     return Model.from_row(updated)
+
+
+def get_prompt_assistant_model() -> Model | None:
+    """Модель для AI-ассистента улучшения промтов (из settings)."""
+    _ensure_db()
+    raw = db.get_setting("prompt_assistant_model_id", "").strip()
+    if raw:
+        try:
+            model = get_by_id(int(raw))
+            if model is not None:
+                return model
+        except ValueError:
+            pass
+
+    active = list_active()
+    if active:
+        return active[0]
+    all_models = list_all()
+    return all_models[0] if all_models else None

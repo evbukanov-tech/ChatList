@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -22,7 +23,9 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
+    QScrollArea,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -37,11 +40,20 @@ import db
 import export_utils
 import models
 import network
+import prompt_assistant
 import seed
+from prompt_assistant import PromptImprovementResult
 from session import ResultSession
 
 LOGS_DIR = Path("logs")
+APP_ICON = Path(__file__).resolve().parent / "app.ico"
 RESPONSE_PREVIEW_LINES = 5
+
+
+def application_icon() -> QIcon | None:
+    if APP_ICON.is_file():
+        return QIcon(str(APP_ICON))
+    return None
 
 
 def setup_logging() -> None:
@@ -109,6 +121,257 @@ class SendWorker(QThread):
             self.finished_ok.emit(responses)
         except Exception as exc:
             self.finished_error.emit(str(exc))
+
+
+class ImprovePromptWorker(QThread):
+    finished_ok = pyqtSignal(object)
+    finished_error = pyqtSignal(str)
+
+    def __init__(self, prompt: str, model: models.Model) -> None:
+        super().__init__()
+        self.prompt = prompt
+        self.model = model
+
+    def run(self) -> None:
+        try:
+            result = prompt_assistant.improve_prompt(self.prompt, self.model)
+            if isinstance(result, str):
+                self.finished_error.emit(result)
+            else:
+                self.finished_ok.emit(result)
+        except Exception as exc:
+            self.finished_error.emit(str(exc))
+
+
+class PromptImproveDialog(QDialog):
+    """Окно AI-ассистента: выбор модели и запрос к OpenRouter."""
+
+    def __init__(
+        self,
+        parent: QWidget | None,
+        original: str,
+        on_apply,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("AI-ассистент — улучшение промта")
+        self.setMinimumSize(640, 520)
+        self._on_apply = on_apply
+        self._original = original
+        self._worker: ImprovePromptWorker | None = None
+        self._has_results = False
+
+        layout = QVBoxLayout(self)
+
+        layout.addWidget(QLabel("Клиент: OpenRouter"))
+
+        model_row = QHBoxLayout()
+        model_row.addWidget(QLabel("Модель:"))
+        self._model_combo = QComboBox()
+        self._populate_models()
+        self._model_combo.currentIndexChanged.connect(self._update_client_info)
+        model_row.addWidget(self._model_combo, stretch=1)
+        layout.addLayout(model_row)
+
+        self._client_info = QLabel()
+        self._client_info.setWordWrap(True)
+        layout.addWidget(self._client_info)
+        self._update_client_info()
+
+        self._status_label = QLabel("Выберите модель и нажмите «Улучшить».")
+        layout.addWidget(self._status_label)
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 0)
+        self._progress.hide()
+        layout.addWidget(self._progress)
+
+        self._improve_btn = QPushButton("Улучшить")
+        self._improve_btn.clicked.connect(self._on_improve_clicked)
+        layout.addWidget(self._improve_btn)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._content = QWidget()
+        self._content_layout = QVBoxLayout(self._content)
+        self._content_layout.addWidget(
+            self._make_section("Исходный", original, readonly=True)
+        )
+        self._content_layout.addStretch()
+        self._scroll.setWidget(self._content)
+        layout.addWidget(self._scroll, stretch=1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _populate_models(self) -> None:
+        all_models = models.list_all()
+        default_id = db.get_setting("prompt_assistant_model_id", "").strip()
+        default_index = 0
+        for index, model in enumerate(all_models):
+            label = model.name
+            if not model.is_active:
+                label += " (неактивна)"
+            self._model_combo.addItem(label, model.id)
+            if str(model.id) == default_id:
+                default_index = index
+        if self._model_combo.count():
+            self._model_combo.setCurrentIndex(default_index)
+
+    def _selected_model(self) -> models.Model | None:
+        model_id = self._model_combo.currentData()
+        if model_id is None:
+            return None
+        return models.get_by_id(int(model_id))
+
+    def _update_client_info(self) -> None:
+        model = self._selected_model()
+        if model is None:
+            self._client_info.setText("Нет доступных моделей.")
+            return
+        self._client_info.setText(f"URL: {model.api_url}\nКлюч (.env): {model.api_id}")
+
+    def _set_busy(self, busy: bool) -> None:
+        self._improve_btn.setEnabled(not busy)
+        self._model_combo.setEnabled(not busy)
+        if busy:
+            self._progress.show()
+        else:
+            self._progress.hide()
+
+    def _on_improve_clicked(self) -> None:
+        if self._worker is not None and self._worker.isRunning():
+            return
+
+        model = self._selected_model()
+        if model is None:
+            show_error(self, "Нет модели", "Добавьте модель на вкладке «Модели».")
+            return
+
+        api_key = config.get_api_key(model.api_id)
+        if api_key is None:
+            show_error(
+                self,
+                "API-ключ",
+                config.missing_api_key_message(model.api_id, model.name),
+            )
+            return
+
+        self._reset_content()
+        self._set_busy(True)
+        self._status_label.setText(f"Отправка запроса ({model.name})…")
+
+        self._worker = ImprovePromptWorker(self._original, model)
+        self._worker.finished_ok.connect(self._on_worker_ok)
+        self._worker.finished_error.connect(self._on_worker_err)
+        self._worker.start()
+
+    def _reset_content(self) -> None:
+        self._has_results = False
+        while self._content_layout.count():
+            item = self._content_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._content_layout.addWidget(
+            self._make_section("Исходный", self._original, readonly=True)
+        )
+        self._content_layout.addStretch()
+
+    def _on_worker_ok(self, result: PromptImprovementResult) -> None:
+        self._set_busy(False)
+        self._has_results = True
+        self.show_results(result)
+
+    def _on_worker_err(self, message: str) -> None:
+        self._set_busy(False)
+        self.show_error(message)
+
+    def show_results(self, result: PromptImprovementResult) -> None:
+        self._status_label.setText("Ответ получен")
+        self._progress.hide()
+
+        while self._content_layout.count():
+            item = self._content_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        if result.partial_parse:
+            warning = QLabel(
+                "Ответ модели распознан не полностью. Проверьте улучшенный вариант."
+            )
+            warning.setWordWrap(True)
+            self._content_layout.addWidget(warning)
+
+        self._content_layout.addWidget(
+            self._make_section("Исходный", result.original, readonly=True)
+        )
+        self._content_layout.addWidget(
+            self._make_section("Улучшенный", result.improved, apply_text=result.improved)
+        )
+
+        for index, alternative in enumerate(result.alternatives, start=1):
+            self._content_layout.addWidget(
+                self._make_section(
+                    f"Альтернатива {index}",
+                    alternative,
+                    apply_text=alternative,
+                )
+            )
+
+        adaptations = {
+            key: result.adaptations[key]
+            for key in prompt_assistant.ADAPTATION_LABELS
+            if result.adaptations.get(key)
+        }
+        if adaptations:
+            group = QGroupBox("Адаптации")
+            group_layout = QVBoxLayout(group)
+            for key, text in adaptations.items():
+                label = prompt_assistant.ADAPTATION_LABELS[key]
+                group_layout.addWidget(
+                    self._make_section(label, text, apply_text=text)
+                )
+            self._content_layout.addWidget(group)
+
+        self._content_layout.addStretch()
+
+    def show_error(self, message: str) -> None:
+        self._status_label.setText("Ошибка запроса")
+        self._progress.hide()
+        error_label = QLabel(message)
+        error_label.setWordWrap(True)
+        error_label.setStyleSheet("color: #c0392b;")
+        self._content_layout.insertWidget(0, error_label)
+
+    def _make_section(
+        self,
+        title: str,
+        text: str,
+        *,
+        readonly: bool = False,
+        apply_text: str | None = None,
+    ) -> QWidget:
+        box = QGroupBox(title)
+        box_layout = QVBoxLayout(box)
+
+        editor = QTextEdit()
+        editor.setPlainText(text)
+        editor.setReadOnly(readonly)
+        editor.setMinimumHeight(80)
+        box_layout.addWidget(editor)
+
+        if apply_text is not None:
+            apply_btn = QPushButton("Подставить в поле ввода")
+            apply_btn.clicked.connect(lambda _checked=False, t=apply_text: self._apply(t))
+            box_layout.addWidget(apply_btn)
+
+        return box
+
+    def _apply(self, text: str) -> None:
+        self._on_apply(text)
+        show_info(self, "Подставлено", "Выбранный вариант подставлен в поле ввода промта.")
 
 
 class ModelEditDialog(QDialog):
@@ -212,6 +475,9 @@ class RequestTab(QWidget):
         self.prompt_edit.setPlaceholderText("Введите промт…")
         self.prompt_edit.setMinimumHeight(100)
 
+        self.improve_btn = QPushButton("Улучшить промт")
+        self.improve_btn.clicked.connect(self._on_improve_prompt)
+
         self.send_btn = QPushButton("Отправить")
         self.send_btn.clicked.connect(self._on_send)
 
@@ -257,13 +523,17 @@ class RequestTab(QWidget):
         btn_row.addWidget(export_json_btn)
         btn_row.addStretch()
 
+        send_row = QHBoxLayout()
+        send_row.addWidget(self.improve_btn)
+        send_row.addWidget(self.send_btn)
+
         layout = QVBoxLayout(self)
         layout.addLayout(top_row)
         layout.addWidget(QLabel("Теги:"))
         layout.addWidget(self.tags_edit)
         layout.addWidget(QLabel("Промт:"))
         layout.addWidget(self.prompt_edit)
-        layout.addWidget(self.send_btn)
+        layout.addLayout(send_row)
         layout.addWidget(self.status_label)
         layout.addWidget(self.results_table, stretch=1)
         layout.addLayout(btn_row)
@@ -295,6 +565,32 @@ class RequestTab(QWidget):
         self.tags_edit.setText(prompt.tags)
         self.session.set_prompt_from_history(prompt.id, prompt.text, prompt.tags)
 
+    def _set_request_buttons_enabled(self, enabled: bool) -> None:
+        self.send_btn.setEnabled(enabled)
+        self.improve_btn.setEnabled(enabled)
+
+    def _apply_improved_prompt(self, text: str) -> None:
+        self.prompt_edit.setPlainText(text)
+        self.session.prompt_id = None
+
+    def _on_improve_prompt(self) -> None:
+        prompt_text = self.prompt_edit.toPlainText().strip()
+        if not prompt_text:
+            show_error(self, "Промт пустой", "Введите текст запроса для улучшения.")
+            return
+
+        if not models.list_all():
+            show_error(
+                self,
+                "Нет моделей",
+                "Добавьте хотя бы одну модель на вкладке «Модели».",
+            )
+            return
+
+        dialog = PromptImproveDialog(self, prompt_text, self._apply_improved_prompt)
+        dialog.exec()
+        self.status_label.setText("Готово")
+
     def _on_send(self) -> None:
         prompt_text = self.prompt_edit.toPlainText().strip()
         if not prompt_text:
@@ -324,7 +620,7 @@ class RequestTab(QWidget):
         self.session.rows.clear()
         self._refresh_results_table()
 
-        self.send_btn.setEnabled(False)
+        self._set_request_buttons_enabled(False)
         self.status_label.setText("Отправка запросов…")
 
         self._worker = SendWorker(prompt_text, active)
@@ -333,13 +629,13 @@ class RequestTab(QWidget):
         self._worker.start()
 
     def _on_send_finished(self, responses: list) -> None:
-        self.send_btn.setEnabled(True)
+        self._set_request_buttons_enabled(True)
         self.session.fill_from_responses(responses)
         self._refresh_results_table()
         self.status_label.setText(f"Получено ответов: {len(responses)}")
 
     def _on_send_error(self, message: str) -> None:
-        self.send_btn.setEnabled(True)
+        self._set_request_buttons_enabled(True)
         self.status_label.setText("Ошибка отправки")
         show_error(self, "Ошибка", message)
 
@@ -847,11 +1143,13 @@ class SettingsTab(QWidget):
         self.timeout_edit = QLineEdit()
         self.referer_edit = QLineEdit()
         self.title_edit = QLineEdit()
+        self.assistant_model_combo = QComboBox()
 
         form = QFormLayout()
         form.addRow("Таймаут запроса (сек):", self.timeout_edit)
         form.addRow("OpenRouter Referer:", self.referer_edit)
         form.addRow("OpenRouter Title:", self.title_edit)
+        form.addRow("Модель по умолчанию (ассистент):", self.assistant_model_combo)
 
         save_btn = QPushButton("Сохранить")
         save_btn.clicked.connect(self._save)
@@ -871,15 +1169,35 @@ class SettingsTab(QWidget):
 
         self._load()
 
+    def _reload_assistant_models(self) -> None:
+        self.assistant_model_combo.blockSignals(True)
+        self.assistant_model_combo.clear()
+        for model in models.list_all():
+            label = model.name
+            if not model.is_active:
+                label += " (неактивна)"
+            self.assistant_model_combo.addItem(label, model.id)
+        self.assistant_model_combo.blockSignals(False)
+
     def _load(self) -> None:
         self.timeout_edit.setText(db.get_setting("request_timeout", "60"))
         self.referer_edit.setText(db.get_setting("openrouter_referer", "http://localhost"))
         self.title_edit.setText(db.get_setting("openrouter_title", "ChatList"))
+        self._reload_assistant_models()
+        raw = db.get_setting("prompt_assistant_model_id", "").strip()
+        if raw:
+            for index in range(self.assistant_model_combo.count()):
+                if str(self.assistant_model_combo.itemData(index)) == raw:
+                    self.assistant_model_combo.setCurrentIndex(index)
+                    break
 
     def _save(self) -> None:
         db.set_setting("request_timeout", self.timeout_edit.text().strip())
         db.set_setting("openrouter_referer", self.referer_edit.text().strip())
         db.set_setting("openrouter_title", self.title_edit.text().strip())
+        model_id = self.assistant_model_combo.currentData()
+        if model_id is not None:
+            db.set_setting("prompt_assistant_model_id", str(model_id))
         show_info(self, "Настройки", "Настройки сохранены.")
 
 
@@ -888,6 +1206,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("ChatList")
         self.setMinimumSize(960, 640)
+        icon = application_icon()
+        if icon is not None:
+            self.setWindowIcon(icon)
 
         self.request_tab = RequestTab()
         tabs = QTabWidget()
@@ -907,6 +1228,9 @@ def main() -> None:
     seed.seed_if_empty()
 
     app = QApplication(sys.argv)
+    icon = application_icon()
+    if icon is not None:
+        app.setWindowIcon(icon)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

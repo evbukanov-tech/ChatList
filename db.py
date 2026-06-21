@@ -177,6 +177,26 @@ def list_prompts(
     return [_row_to_prompt(row) for row in rows]
 
 
+def update_prompt(
+    prompt_id: int,
+    text: str,
+    tags: str = "",
+    db_path: str | Path = DEFAULT_DB_PATH,
+) -> None:
+    with _connect(db_path) as conn:
+        conn.execute(
+            "UPDATE prompts SET text = ?, tags = ? WHERE id = ?",
+            (text, tags, prompt_id),
+        )
+        conn.commit()
+
+
+def delete_prompt(prompt_id: int, db_path: str | Path = DEFAULT_DB_PATH) -> None:
+    with _connect(db_path) as conn:
+        conn.execute("DELETE FROM prompts WHERE id = ?", (prompt_id,))
+        conn.commit()
+
+
 # --- models ---
 
 

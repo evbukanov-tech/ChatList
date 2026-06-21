@@ -35,6 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+import app_appearance
 import config
 import db
 import export_utils
@@ -47,6 +48,7 @@ from session import ResultSession
 
 LOGS_DIR = Path("logs")
 APP_ICON = Path(__file__).resolve().parent / "app.ico"
+APP_VERSION = "1.0"
 RESPONSE_PREVIEW_LINES = 5
 
 
@@ -1137,30 +1139,89 @@ class ResultsTab(QWidget):
         self._open_result_markdown(row)
 
 
+class AboutDialog(QDialog):
+    """Краткая информация о программе."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("О программе")
+        self.setMinimumWidth(480)
+
+        icon_label = QLabel()
+        icon = application_icon()
+        if icon is not None:
+            pixmap = icon.pixmap(64, 64)
+            if not pixmap.isNull():
+                icon_label.setPixmap(pixmap)
+        icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel(f"<h2>ChatList {APP_VERSION}</h2>")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        description = QLabel(
+            "Приложение для отправки одного промта в несколько нейросетей "
+            "и сравнения их ответов. Выбранные результаты сохраняются в SQLite."
+        )
+        description.setWordWrap(True)
+        description.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        stack = QLabel(
+            "Python 3.11+ · PyQt6 · SQLite · httpx\n"
+            "Лицензия: MIT"
+        )
+        stack.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        buttons.accepted.connect(self.accept)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(icon_label)
+        layout.addWidget(title)
+        layout.addWidget(description)
+        layout.addWidget(stack)
+        layout.addWidget(buttons)
+
+
 class SettingsTab(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("Светлая", app_appearance.THEME_LIGHT)
+        self.theme_combo.addItem("Тёмная", app_appearance.THEME_DARK)
+
+        self.font_size_combo = QComboBox()
+        for size in app_appearance.FONT_SIZE_OPTIONS:
+            self.font_size_combo.addItem(f"{size} pt", size)
+
         self.timeout_edit = QLineEdit()
         self.referer_edit = QLineEdit()
         self.title_edit = QLineEdit()
         self.assistant_model_combo = QComboBox()
 
-        form = QFormLayout()
-        form.addRow("Таймаут запроса (сек):", self.timeout_edit)
-        form.addRow("OpenRouter Referer:", self.referer_edit)
-        form.addRow("OpenRouter Title:", self.title_edit)
-        form.addRow("Модель по умолчанию (ассистент):", self.assistant_model_combo)
+        appearance_form = QFormLayout()
+        appearance_form.addRow("Тема:", self.theme_combo)
+        appearance_form.addRow("Размер шрифта:", self.font_size_combo)
+
+        api_form = QFormLayout()
+        api_form.addRow("Таймаут запроса (сек):", self.timeout_edit)
+        api_form.addRow("OpenRouter Referer:", self.referer_edit)
+        api_form.addRow("OpenRouter Title:", self.title_edit)
+        api_form.addRow("Модель по умолчанию (ассистент):", self.assistant_model_combo)
 
         save_btn = QPushButton("Сохранить")
         save_btn.clicked.connect(self._save)
         refresh_btn = QPushButton("Обновить")
         refresh_btn.clicked.connect(self._load)
 
-        group = QGroupBox("Настройки приложения")
-        group.setLayout(form)
+        appearance_group = QGroupBox("Внешний вид")
+        appearance_group.setLayout(appearance_form)
+
+        api_group = QGroupBox("Сеть и ассистент")
+        api_group.setLayout(api_form)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(group)
+        layout.addWidget(appearance_group)
+        layout.addWidget(api_group)
         btn_row = QHBoxLayout()
         btn_row.addWidget(save_btn)
         btn_row.addWidget(refresh_btn)
@@ -1179,7 +1240,26 @@ class SettingsTab(QWidget):
             self.assistant_model_combo.addItem(label, model.id)
         self.assistant_model_combo.blockSignals(False)
 
+    def _set_combo_by_data(self, combo: QComboBox, value) -> None:
+        for index in range(combo.count()):
+            if combo.itemData(index) == value:
+                combo.setCurrentIndex(index)
+                return
+
     def _load(self) -> None:
+        theme = app_appearance.normalize_theme(
+            db.get_setting(app_appearance.SETTING_THEME, app_appearance.DEFAULT_THEME)
+        )
+        self._set_combo_by_data(self.theme_combo, theme)
+
+        font_size = app_appearance.normalize_font_size(
+            db.get_setting(
+                app_appearance.SETTING_FONT_SIZE,
+                str(app_appearance.DEFAULT_FONT_SIZE),
+            )
+        )
+        self._set_combo_by_data(self.font_size_combo, font_size)
+
         self.timeout_edit.setText(db.get_setting("request_timeout", "60"))
         self.referer_edit.setText(db.get_setting("openrouter_referer", "http://localhost"))
         self.title_edit.setText(db.get_setting("openrouter_title", "ChatList"))
@@ -1192,12 +1272,22 @@ class SettingsTab(QWidget):
                     break
 
     def _save(self) -> None:
+        theme = self.theme_combo.currentData()
+        if theme is not None:
+            db.set_setting(app_appearance.SETTING_THEME, str(theme))
+
+        font_size = self.font_size_combo.currentData()
+        if font_size is not None:
+            db.set_setting(app_appearance.SETTING_FONT_SIZE, str(font_size))
+
         db.set_setting("request_timeout", self.timeout_edit.text().strip())
         db.set_setting("openrouter_referer", self.referer_edit.text().strip())
         db.set_setting("openrouter_title", self.title_edit.text().strip())
         model_id = self.assistant_model_combo.currentData()
         if model_id is not None:
             db.set_setting("prompt_assistant_model_id", str(model_id))
+
+        app_appearance.apply_appearance()
         show_info(self, "Настройки", "Настройки сохранены.")
 
 
@@ -1220,6 +1310,13 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(tabs)
 
+        help_menu = self.menuBar().addMenu("Справка")
+        about_action = help_menu.addAction("О программе")
+        about_action.triggered.connect(self._show_about)
+
+    def _show_about(self) -> None:
+        AboutDialog(self).exec()
+
 
 def main() -> None:
     setup_logging()
@@ -1231,6 +1328,7 @@ def main() -> None:
     icon = application_icon()
     if icon is not None:
         app.setWindowIcon(icon)
+    app_appearance.apply_appearance(app)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

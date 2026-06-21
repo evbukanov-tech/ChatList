@@ -17,6 +17,8 @@ DEFAULT_SETTINGS: dict[str, str] = {
     "request_timeout": "60",
     "openrouter_referer": "http://localhost",
     "openrouter_title": "ChatList",
+    "ui_theme": "light",
+    "ui_font_size": "10",
 }
 
 

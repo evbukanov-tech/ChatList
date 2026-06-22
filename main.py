@@ -43,12 +43,12 @@ import models
 import network
 import prompt_assistant
 import seed
+import version
 from prompt_assistant import PromptImprovementResult
 from session import ResultSession
 
 LOGS_DIR = Path("logs")
 APP_ICON = Path(__file__).resolve().parent / "app.ico"
-APP_VERSION = "1.0"
 RESPONSE_PREVIEW_LINES = 5
 
 
@@ -1155,7 +1155,7 @@ class AboutDialog(QDialog):
                 icon_label.setPixmap(pixmap)
         icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        title = QLabel(f"<h2>ChatList {APP_VERSION}</h2>")
+        title = QLabel(f"<h2>ChatList {version.__version__}</h2>")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         description = QLabel(
@@ -1294,7 +1294,7 @@ class SettingsTab(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("ChatList")
+        self.setWindowTitle(f"ChatList {version.__version__}")
         self.setMinimumSize(960, 640)
         icon = application_icon()
         if icon is not None:
@@ -1320,6 +1320,7 @@ class MainWindow(QMainWindow):
 
 def main() -> None:
     setup_logging()
+    logging.getLogger("chatlist").info("Запуск ChatList %s", version.__version__)
     config.load_env()
     db.init_db()
     seed.seed_if_empty()

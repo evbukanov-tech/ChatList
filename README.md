@@ -2,6 +2,8 @@
 
 Python-приложение для отправки одного промта в несколько нейросетей и сравнения ответов.
 
+**Скачать:** [последний релиз](https://github.com/evbukanov-tech/ChatList/releases/latest) · **Сайт:** [GitHub Pages](https://evbukanov-tech.github.io/ChatList/)
+
 ## Требования
 
 - Python 3.11+
@@ -71,8 +73,17 @@ export_utils.py — экспорт
 
 Логи запросов: `logs/chatlist.log`
 
+## Сборка установщика (Windows)
+
+```powershell
+.\build.ps1
+```
+
+Результат: `installer\ChatList-Setup-<версия>.exe`. Версия берётся из [`version.py`](version.py).
+
 ## Документация
 
 - [PROJECT.md](PROJECT.md) — спецификация
 - [PLAN.md](PLAN.md) — план реализации
 - [DATABASE.md](DATABASE.md) — схема БД
+- [docs/PUBLISHING.md](docs/PUBLISHING.md) — публикация на GitHub Release и Pages

@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $v = python -c "from version import __version__; print(__version__)"
+          echo "app_version=$v" >> $env:GITHUB_OUTPUT
+          echo "App version: $v"
+
+      - name: Build with PyInstaller
+        run: pyinstaller --noconfirm ChatList.spec
+
+      - name: Build installer (Inno Setup)
+        uses: amake/innosetup-action@v1.2.0
+        with:
+          path: ChatList.iss
+          options: /DMyAppVersion=${{ steps.version.outputs.app_version }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ChatList-Setup-${{ steps.version.outputs.app_version }}
+          path: installer/ChatList-Setup-*.exe
+          retention-days: 7
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/ChatList-Setup-*.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -31,6 +31,14 @@ MANIFEST
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
 *.manifest
 *.spec
+!ChatList.spec
+
+# Windows installer (публикуется через GitHub Release)
+installer/*.exe
+
+# Черновики release notes (генерируются scripts/publish-release.ps1)
+release-notes-*.md
+!.github/release-notes-template.md
 
 # Installer logs
 pip-log.txt

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="ChatList — отправка одного промта в несколько нейросетей и сравнение ответов.">
+  <title>ChatList — сравнение ответов нейросетей</title>
+  <link rel="icon" href="assets/app.ico" type="image/x-icon">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="container">
+    <img class="logo" src="assets/app.ico" alt="ChatList" width="72" height="72">
+    <h1>ChatList</h1>
+    <p class="tagline">
+      Отправляйте один промт в несколько нейросетей параллельно и сравнивайте ответы в одном окне.
+    </p>
+    <span class="version-badge" id="version">Версия …</span>
+    <div class="actions">
+      <a class="btn btn-primary" id="download-btn" href="https://github.com/evbukanov-tech/ChatList/releases/latest">
+        Скачать для Windows
+      </a>
+      <a class="btn btn-secondary" href="https://github.com/evbukanov-tech/ChatList" target="_blank" rel="noopener">
+        Исходный код
+      </a>
+      <a class="btn btn-secondary" href="https://github.com/evbukanov-tech/ChatList/blob/estai-tech/README.md" target="_blank" rel="noopener">
+        Документация
+      </a>
+    </div>
+  </header>
+
+  <main class="container">
+    <section>
+      <h2>Возможности</h2>
+      <div class="features">
+        <article class="feature">
+          <h3>Параллельные запросы</h3>
+          <p>Один промт уходит во все активные модели одновременно через OpenRouter.</p>
+        </article>
+        <article class="feature">
+          <h3>Сравнение ответов</h3>
+          <p>Результаты в таблице с чекбоксами — сохраняйте только нужные строки.</p>
+        </article>
+        <article class="feature">
+          <h3>История и экспорт</h3>
+          <p>Промты и ответы в SQLite, выгрузка в Markdown и JSON.</p>
+        </article>
+        <article class="feature">
+          <h3>AI-ассистент промта</h3>
+          <p>Улучшение и переформулировка запроса перед отправкой.</p>
+        </article>
+        <article class="feature">
+          <h3>Управление моделями</h3>
+          <p>Добавляйте, включайте и отключайте модели без правки кода.</p>
+        </article>
+        <article class="feature">
+          <h3>Локальные данные</h3>
+          <p>API-ключи в .env.local на вашем компьютере, не в облаке.</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <h2>Быстрый старт</h2>
+      <ol class="steps">
+        <li><strong>Скачайте установщик</strong> — кнопка «Скачать для Windows» выше.</li>
+        <li><strong>Установите ChatList</strong> — мастер Inno Setup, права пользователя достаточно.</li>
+        <li><strong>Укажите API-ключ</strong> — скопируйте <code>_internal\.env.example</code> в <code>_internal\.env.local</code> и добавьте <code>OPENROUTER_API_KEY</code>.</li>
+        <li><strong>Отправьте промт</strong> — выберите модели, сравните ответы, сохраните лучшие.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Системные требования</h2>
+      <div class="requirements">
+        <ul>
+          <li>Windows 10/11 (64-bit)</li>
+          <li>~150 МБ на диске после установки</li>
+          <li>Ключ OpenRouter (<a href="https://openrouter.ai/" target="_blank" rel="noopener">openrouter.ai</a>)</li>
+          <li>Подключение к интернету для запросов к API</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer class="container">
+    <p>ChatList · MIT License · <span id="footer-version">…</span></p>
+    <p>
+      <a href="https://github.com/evbukanov-tech/ChatList/releases">Все релизы</a>
+      ·
+      <a href="https://github.com/evbukanov-tech/ChatList/issues">Сообщить об ошибке</a>
+    </p>
+  </footer>
+
+  <script>
+    const REPO = "evbukanov-tech/ChatList";
+
+    fetch(`https://api.github.com/repos/${REPO}/releases/latest`)
+      .then((response) => response.ok ? response.json() : null)
+      .then((release) => {
+        if (!release) return;
+
+        const version = release.tag_name.replace(/^v/, "");
+        document.getElementById("version").textContent = `Версия ${version}`;
+        document.getElementById("footer-version").textContent = `v${version}`;
+
+        const installer = release.assets.find((asset) =>
+          asset.name.startsWith("ChatList-Setup-") && asset.name.endsWith(".exe")
+        );
+        if (installer) {
+          document.getElementById("download-btn").href = installer.browser_download_url;
+        }
+      })
+      .catch(() => {
+        document.getElementById("version").textContent = "Последняя версия на GitHub";
+      });
+  </script>
+</body>
+</html>

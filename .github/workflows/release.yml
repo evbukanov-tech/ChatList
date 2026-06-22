@@ -37,11 +37,17 @@ jobs:
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm ChatList.spec
 
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
       - name: Build installer (Inno Setup)
-        uses: amake/innosetup-action@v1.2.0
-        with:
-          path: ChatList.iss
-          options: /DMyAppVersion=${{ steps.version.outputs.app_version }}
+        shell: pwsh
+        run: |
+          $Iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $Iscc)) {
+            throw "Inno Setup not found: $Iscc"
+          }
+          & $Iscc "/DMyAppVersion=${{ steps.version.outputs.app_version }}" "ChatList.iss"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
